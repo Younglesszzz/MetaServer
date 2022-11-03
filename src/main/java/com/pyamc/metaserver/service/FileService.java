@@ -122,16 +122,22 @@ public class FileService {
         // 预占空间
         for (DataNode inode : inodes) {
             String checkPointKey = getNodeInfoKey(inode.getKey());
-            String expect = etcdService.syncGetValue(checkPointKey);
-            for (int i = 0; i < retryTimes; i++) {
+            int i = 0;
+            while (true) {
+                if (i == retryTimes) {
+                    logger.warn("SendChunk2DataNode#ETCD CAS RETRY REACH LIMIT");
+                    return;
+                }
+                String expect = etcdService.syncGetValue(checkPointKey);
+                if (expect == null) {
+                    logger.warn("SendChunk2DataNode#Sync Get Value Failed");
+                    return;
+                }
                 if (etcdService.syncCas(checkPointKey, expect, expect + ChunkSize)) {
                     inodeSnapShot.append(inode.getKey()).append(":").append(expect).append(";");
                     break;
                 }
-                if (i == retryTimes - 1) {
-                    logger.warn("SendChunk2DataNode#ETCD CAS RETRY REACH LIMIT");
-                    return ;
-                }
+                i++;
             }
         }
         etcdService.put(getChunk2NodesKey(c.getChunk().getChunkId()), inodeSnapShot.substring(0, inodeSnapShot.length() - 1));
