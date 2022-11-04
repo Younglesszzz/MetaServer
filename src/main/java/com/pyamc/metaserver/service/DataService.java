@@ -18,9 +18,9 @@ import java.util.concurrent.ExecutionException;
 @Service
 public class DataService {
     private static Map<String, DataNode> dataCluster = new ConcurrentHashMap<String, DataNode>();
-    private final Map<Long, Watch.Watcher> watcherMap = new ConcurrentHashMap<Long, Watch.Watcher>();
+    private final Map<String, Watch.Watcher> watcherMap = new ConcurrentHashMap<String, Watch.Watcher>();
     private final Logger logger = LoggerFactory.getLogger(this.getClass());
-    private static final long watchKey = "DATANODE_CLUSTER";
+    private static final String watchKey = "DATANODE_CLUSTER";
 
     @Resource
     EtcdService etcdService;
@@ -42,7 +42,7 @@ public class DataService {
                         keyValue.getKey().toString(),
                         keyValue.getValue().toString()
                 );
-                // 修改操作
+                // 如果是更新操作，重新编译数据节点
                 if (WatchEvent.EventType.PUT.equals(eventType)) {
                     parseDataNodeCluster(watchKey);
                 }
@@ -67,7 +67,7 @@ public class DataService {
     }
 
     // 编译数据节点集群
-    public void parseDataNodeCluster(long key) {
+    public void parseDataNodeCluster(String key) {
         String watchValue = null;
         try {
             watchValue = etcdService.syncGetValue(watchKey);

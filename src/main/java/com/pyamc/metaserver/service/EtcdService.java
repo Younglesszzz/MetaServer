@@ -33,8 +33,8 @@ public class EtcdService {
     private static final String watchKey = "DATANODE_CLUSTER";
     private Logger logger = LoggerFactory.getLogger(this.getClass());
 
-    @Resource
-    DataService dataService;
+//    @Resource
+//    DataService dataService;
 
 
 

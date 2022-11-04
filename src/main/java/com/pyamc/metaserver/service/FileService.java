@@ -33,17 +33,6 @@ enum FileStatus {
     }
 }
 
-enum ChunkStatus {
-    Initial("0"),  Done("3");
-    private final String status;
-    ChunkStatus (String status) {
-        this.status = status;
-    }
-    public String getStatus() {
-        return this.status;
-    }
-}
-
 @Service
 public class FileService {
     @Resource
