@@ -17,10 +17,10 @@ import java.util.concurrent.ExecutionException;
 
 @Service
 public class DataService {
-    private static Map<String, DataNode> dataCluster = new ConcurrentHashMap<>();
-    private final Map<String, Watch.Watcher> watcherMap = new ConcurrentHashMap<>();
+    private static Map<String, DataNode> dataCluster = new ConcurrentHashMap<String, DataNode>();
+    private final Map<Long, Watch.Watcher> watcherMap = new ConcurrentHashMap<Long, Watch.Watcher>();
     private final Logger logger = LoggerFactory.getLogger(this.getClass());
-    private static final String watchKey = "DATANODE_CLUSTER";
+    private static final long watchKey = "DATANODE_CLUSTER";
 
     @Resource
     EtcdService etcdService;
@@ -67,7 +67,7 @@ public class DataService {
     }
 
     // 编译数据节点集群
-    public void parseDataNodeCluster(String key) {
+    public void parseDataNodeCluster(long key) {
         String watchValue = null;
         try {
             watchValue = etcdService.syncGetValue(watchKey);

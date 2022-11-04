@@ -24,9 +24,7 @@ public class FileController {
     public Result put(@RequestParam("uploadFile") MultipartFile uploadFile,
                          @RequestParam("fileTagName") String fileTagName)  {
 
-        // 切分
         fileService.process(uploadFile);
-
         return new Result();
     }
 }

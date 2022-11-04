@@ -1,7 +1,7 @@
 package com.pyamc.metaserver.entity;
 
 public class Chunk {
-    protected String chunkId;
+    protected String chunkKey;
     private byte[] buffer;
     private String checkSum;
 
@@ -14,17 +14,17 @@ public class Chunk {
     }
 
     public Chunk(String chunkId, byte[] buffer, String checkSum) {
-        this.chunkId = chunkId;
+        this.chunkKey = chunkId;
         this.buffer = buffer;
         this.checkSum = checkSum;
     }
 
-    public String getChunkId() {
-        return chunkId;
+    public String getChunkKey() {
+        return chunkKey;
     }
 
-    public void setChunkId(String chunkId) {
-        this.chunkId = chunkId;
+    public void setChunkKey(String chunkKey) {
+        this.chunkKey = chunkKey;
     }
 
     public byte[] getBuffer() {

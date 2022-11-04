@@ -1,23 +1,25 @@
 package com.pyamc.metaserver.service;
 
+import com.alibaba.fastjson.JSON;
 import com.pyamc.metaserver.entity.*;
 import com.pyamc.metaserver.util.FileUtil;
 import java.lang.String;
 import io.etcd.jetcd.KeyValue;
 import io.etcd.jetcd.kv.GetResponse;
-import io.etcd.jetcd.kv.TxnResponse;
 import io.etcd.jetcd.options.GetOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
-import javax.xml.crypto.Data;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 
 enum FileStatus {
@@ -51,46 +53,68 @@ public class FileService {
     private static final int CheckSumSize = 32;
     private static final int FileBytesSize = ChunkSize - CheckSumSize;
     private static final int retryTimes = 3;
+    private static Map<String, FileMeta> lockPool = new ConcurrentHashMap<>();
     public Result process(MultipartFile uploadFile) {
+        String fileKey = null;
         try {
             byte[] bytes = uploadFile.getBytes();
-            String fileKey = FileUtil.getMD5sum(bytes);
-            if (fileKey.length() == 0) {
-                logger.warn("Process#File Key Is Empty");
-                return null;
+            fileKey = getMd5Code(bytes);
+            if (fileKey.isEmpty()) {
+                return Result.Fail();
             }
-            // 先查元数据
-            String fileStatus = getFileStatus(fileKey);
-            if (fileStatus.equals(FileStatus.Done.getStatus())) {
+            // 校验文件状态
+            FileMeta fileMeta = getFileMeta(fileKey);
+            if (fileMeta != null && FileStatus.Done.getStatus().equals(fileMeta.getFileStatus())) {
                 return Result.Success();
             }
-            if (fileStatus.equals("")) {
-                etcdService.put(getStatusKey(fileKey), FileStatus.Initial.getStatus());
+            // todo 后续支持续传
+            else if (fileMeta != null && FileStatus.Initial.getStatus().equals(fileMeta.getFileStatus())) {
+                return Result.Fail();
             }
-            // 进行分块
-            List<ChunkInfo> chunks = buildChunks(fileKey, bytes);
-            // file -> chunks
-            etcdService.put(getFile2ChunksKey(fileKey), buildFile2ChunksVal(chunks));
+            List<Chunk> chunks = buildChunks(fileKey, bytes);
+            // todo 原子性问题 etcd 无法解决 需要加锁 单机/分布式
+            putFileMeta(fileKey, chunks, uploadFile);
             for (int i = 0; i < chunks.size(); i++) {
                 List<DataNode> nodes =  calcDataNodes();
-                ChunkInfo c = chunks.get(i);
-                // chunk -> inodes
-                etcdService.put(getChunk2NodesKey(c.getChunk().getChunkId()), buildChunk2NodesVal(nodes));
-                c.setInodes(nodes);
-                // 写入分块初始状态
-                etcdService.put(getStatusKey(c.getChunk().getChunkId()), FileStatus.Initial.getStatus());
+                if (nodes == null || nodes.size() < 3) {
+                    return Result.Fail();
+                }
+                Chunk c = chunks.get(i);
                 // 分块发送
-                sendChunk2DataNode(c, c.getInodes());
-                // 分块状态变更
-                etcdService.put(getStatusKey(c.getChunk().getChunkId()), FileStatus.Done.getStatus());
+                sendChunk2DataNode(c, nodes);
             }
             // 文件状态变更
-            etcdService.put(getStatusKey(fileKey), FileStatus.Done.getStatus());
         } catch (IOException | ExecutionException | InterruptedException e) {
             e.printStackTrace();
             return Result.Fail();
+        } finally {
+            if (fileKey != null) {
+                lockPool.remove(fileKey);
+            }
         }
         return Result.Success();
+    }
+
+    private FileMeta getFileMeta(String fileKey) throws ExecutionException, InterruptedException {
+        String value = etcdService.syncGetValue(fileKey);
+        if (value.isEmpty()) {
+            return null;
+        }
+        return (FileMeta) JSON.parse(value);
+    }
+
+    private String getMd5Code(byte[] bytes) throws IOException, ExecutionException, InterruptedException {
+        String fileKey = FileUtil.getMD5sum(bytes);
+        if (fileKey.length() == 0) {
+            logger.warn("Process#File Key Is Empty");
+            return "";
+        }
+        return fileKey;
+    }
+
+
+    private void putFileMeta(String fileKey, List<Chunk> chunks, MultipartFile uploadFile) {
+        etcdService.put(getFileMetaKey(fileKey), buildFileMeta(fileKey, chunks, uploadFile));
     }
 
     private String buildChunk2NodesVal(List<DataNode> nodes) {
@@ -101,48 +125,64 @@ public class FileService {
         return sb.toString();
     }
 
-    private String getChunk2NodesKey(String chunkId) {
-        return "CHUNK2NODES_" + chunkId;
+    private String getChunkMetaKey(String chunkId) {
+        return "CHUNKINFO_" + chunkId;
     }
 
-    private String buildFile2ChunksVal(List<ChunkInfo> chunks) {
-        StringBuilder sb = new StringBuilder();
-        for (ChunkInfo chunk : chunks) {
-            sb.append(chunk.getChunk().getChunkId()).append(";");
+    private String buildFileMeta(String fileKey, List<Chunk> chunks, MultipartFile uploadFile) {
+        List<String> chunkKeys = new ArrayList<>(chunks.size());
+        for (Chunk chunk : chunks) {
+            chunkKeys.add(chunk.getChunkKey());
         }
-        return sb.toString();
+        FileMeta fileMeta = new FileMeta(uploadFile.getOriginalFilename(),
+                fileKey, uploadFile.getSize(), uploadFile.getContentType(), chunkKeys);
+        return JSON.toJSONString(fileMeta);
     }
 
-    private String getFile2ChunksKey(String fileKey) {
-        return "FILE2CHUNK_" + fileKey;
+    private String getFileMetaKey(String fileKey) {
+        return "FILE_KEY" + fileKey;
     }
 
-    private void sendChunk2DataNode(ChunkInfo c, List<DataNode> inodes) throws ExecutionException, InterruptedException {
-        StringBuilder inodeSnapShot = new StringBuilder();
-        // 预占空间
+    private void sendChunk2DataNode(Chunk c, List<DataNode> inodes) throws ExecutionException, InterruptedException {
+        List<INodeSnapShot> snapShots = new ArrayList<>(inodes.size());
+        // 预占DataNode空间
         for (DataNode inode : inodes) {
-            String checkPointKey = getNodeInfoKey(inode.getKey());
             int i = 0;
             while (true) {
                 if (i == retryTimes) {
                     logger.warn("SendChunk2DataNode#ETCD CAS RETRY REACH LIMIT");
                     return;
                 }
-                String expect = etcdService.syncGetValue(checkPointKey);
-                if (expect == null) {
-                    logger.warn("SendChunk2DataNode#Sync Get Value Failed");
+                DataNode node = GetNodeInfo(inode.getKey());
+                if (node == null) {
+                    logger.warn("SendChunk2DataNode#Node Not Exist");
                     return;
                 }
-                if (etcdService.syncCas(checkPointKey, expect, expect + ChunkSize)) {
-                    inodeSnapShot.append(inode.getKey()).append(":").append(expect).append(";");
+                DataNode copy = new DataNode();
+                BeanUtils.copyProperties(node, copy);
+                copy.setCheckpoint(copy.getCheckpoint() + ChunkSize);
+                if (etcdService.syncCas(getNodeInfoKey(inode.getKey()),
+                        JSON.toJSONString(node), JSON.toJSONString(copy))) {
+                    snapShots.add(new INodeSnapShot(inode.getKey(), node.getCheckpoint(), 0));
                     break;
                 }
                 i++;
             }
         }
-        etcdService.put(getChunk2NodesKey(c.getChunk().getChunkId()), inodeSnapShot.substring(0, inodeSnapShot.length() - 1));
+        ChunkMeta cm = new ChunkMeta(c.getChunkKey(), snapShots);
+        etcdService.put(getChunkMetaKey(c.getChunkKey()), JSON.toJSONString(cm));
         // 实际发送
+        for (int i = 0; i < snapShots.size(); i++) {
+//            HttpSendChunk();
+            cm.getInodes().get(i).setStatus(1);
+        }
+        // update chunk meta
+        etcdService.put(getChunkMetaKey(c.getChunkKey()), JSON.toJSONString(cm));
+    }
 
+    private DataNode GetNodeInfo(String key) throws ExecutionException, InterruptedException {
+        String value = etcdService.syncGetValue(getNodeInfoKey(key));
+        return value.isEmpty() ? null : (DataNode) JSON.parse(value);
     }
 
     private String getNodeInfoKey(String nodeName) {
@@ -153,7 +193,7 @@ public class FileService {
     private List<DataNode> calcDataNodes() {
         GetResponse res = null;
         try {
-             res = etcdService.getWithOption("", GetOption.newBuilder().
+             res = etcdService.getWithOption("DATANODE_", GetOption.newBuilder().
                     isPrefix(true).
                     withLimit(3).
                     withSortField(GetOption.SortTarget.VALUE).
@@ -188,16 +228,15 @@ public class FileService {
         return "";
     }
 
-    private List<ChunkInfo> buildChunks(String fileKey, byte[] bytes) {
+    private List<Chunk> buildChunks(String fileKey, byte[] bytes) {
         List<byte[]> bytesList = split2BytesList(bytes);
-        List<ChunkInfo> chunks = new ArrayList<>(bytesList.size());
+        List<Chunk> chunks = new ArrayList<>(bytesList.size());
         for (int i = 0; i < bytesList.size(); i++) {
             byte[] b = bytesList.get(i);
             String md5Code = FileUtil.getMD5sum(b);
             String chunkKey = getChunkKey(fileKey, i);
             Chunk c = new Chunk(chunkKey, b, md5Code);
-            ChunkInfo chunkInfo = new ChunkInfo(c);
-            chunks.add(chunkInfo);
+            chunks.add(c);
         }
         return chunks;
     }
