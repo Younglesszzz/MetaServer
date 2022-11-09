@@ -33,10 +33,16 @@ public class EtcdService {
     private static final String watchKey = "DATANODE_CLUSTER";
     private Logger logger = LoggerFactory.getLogger(this.getClass());
 
-//    @Resource
-//    DataService dataService;
+    // set a key if not exists
+    public TxnResponse setNx(String k, String v) throws ExecutionException, InterruptedException {
+        ByteSequence bsKey = byteSequenceOf(k);
+        ByteSequence bsValue = byteSequenceOf(v);
 
-
+        Cmp cmp = new Cmp(bsKey, Cmp.Op.EQUAL, CmpTarget.version(0));
+        TxnResponse txnResponse = kvClient.txn().If(cmp).
+                Then(Op.put(bsKey, bsValue, PutOption.DEFAULT)).commit().get();
+        return txnResponse;
+    }
 
     public CompletableFuture<PutResponse> put(String k, String v) {
         ByteSequence key = ByteSequence.from(k.getBytes());

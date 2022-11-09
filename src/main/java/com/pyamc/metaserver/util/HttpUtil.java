@@ -6,6 +6,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +15,8 @@ import java.util.Objects;
 
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
+import org.apache.http.client.ClientProtocolException;
+import org.apache.http.client.HttpClient;
 import org.apache.http.client.entity.UrlEncodedFormEntity;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpPost;
@@ -23,6 +26,7 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.entity.mime.MultipartEntityBuilder;
 import org.apache.http.entity.mime.content.FileBody;
 import org.apache.http.entity.mime.content.StringBody;
+import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.message.BasicNameValuePair;
 
@@ -87,6 +91,17 @@ public class HttpUtil {
     /**
      * 执行post请求获取响应
      *
+     * @param url    请求地址
+     * @param params 请求参数
+     * @return 响应内容
+     */
+    public static byte[] byteArrPost(String url, Map<String, String> params) {
+        return byteArrPost(url, null, params);
+    }
+
+    /**
+     * 执行post请求获取响应
+     *
      * @param url     请求地址
      * @param headers 请求头参数
      * @param params  请求参数
@@ -96,6 +111,72 @@ public class HttpUtil {
         HttpPost post = new HttpPost(url);
         post.setEntity(getHttpEntity(params));
         return getRespString(post, headers);
+    }
+
+    public static String postEntity(String url, HttpEntity entity) {
+        HttpPost post = new HttpPost(url);
+        post.setEntity(entity);
+        HttpResponse response = null;
+        try {
+            response = HttpClients.createDefault().execute(post);
+        } catch (IOException e) {
+            e.printStackTrace();
+            return "";
+        }
+        int status = response.getStatusLine().getStatusCode();
+        String resultStr =null;
+        if (status == 200) {
+            byte[] content;
+            try {
+                content = getContent(response);
+                if (content != null) {
+                    resultStr = new String(content, StandardCharsets.UTF_8);
+                    System.out.println("httpPost返回的结果==:" + resultStr);
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        return resultStr == null ? "" : resultStr;
+    }
+
+    private static byte[] getContent(HttpResponse response)
+            throws IOException {
+        InputStream result = null;
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try {
+            HttpEntity resEntity = response.getEntity();
+            if (resEntity != null) {
+                result = resEntity.getContent();
+                int len = 0;
+                while ((len = result.read()) != -1) {
+                    out.write(len);
+                }
+                return out.toByteArray();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+            throw new IOException("getContent异常", e);
+        } finally {
+            out.close();
+            if (result != null) {
+                result.close();
+            }
+        }
+        return null;
+    }
+    /**
+     * 执行post请求获取响应
+     *
+     * @param url     请求地址
+     * @param headers 请求头参数
+     * @param params  请求参数
+     * @return 响应内容
+     */
+    public static byte[] byteArrPost(String url, Map<String, String> headers, Map<String, String> params) {
+        HttpPost post = new HttpPost(url);
+        post.setEntity(getHttpEntity(params));
+        return getRespBytes(post, headers);
     }
 
     /**
@@ -308,4 +389,21 @@ public class HttpUtil {
         return "";
     }
 
+    private static byte[] getRespBytes(HttpUriRequest request, Map<String, String> headers) {
+        byte[] bytes = new byte[BYTE_ARRAY_LENGTH];
+        int len = 0;
+        try (InputStream in = getRespInputStream(request, headers);
+             ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            if (Objects.isNull(in)) {
+                return null;
+            }
+            while ((len = in.read(bytes)) != -1) {
+                bos.write(bytes, 0, len);
+            }
+            return bos.toByteArray();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
 }

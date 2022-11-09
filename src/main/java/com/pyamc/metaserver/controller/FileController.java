@@ -4,6 +4,7 @@ import com.pyamc.metaserver.entity.Result;
 import com.pyamc.metaserver.service.FileService;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+import reactor.netty.http.client.HttpClient;
 
 import javax.annotation.Resource;
 
@@ -15,7 +16,6 @@ public class FileController {
 
     @RequestMapping("/get")
     public Result get(@RequestParam String fileKey) {
-
         return new Result();
     }
 

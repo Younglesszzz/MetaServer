@@ -4,6 +4,8 @@ public class Chunk {
     protected String chunkKey;
     private byte[] buffer;
     private String checkSum;
+    private int size;
+
 
     public Chunk() {
     }
@@ -18,6 +20,14 @@ public class Chunk {
         this.buffer = buffer;
         this.checkSum = checkSum;
     }
+
+    public Chunk(String chunkKey, byte[] buffer, String checkSum, int size) {
+        this.chunkKey = chunkKey;
+        this.buffer = buffer;
+        this.checkSum = checkSum;
+        this.size = size;
+    }
+
 
     public String getChunkKey() {
         return chunkKey;
@@ -41,5 +51,13 @@ public class Chunk {
 
     public void setCheckSum(String checkSum) {
         this.checkSum = checkSum;
+    }
+
+    public int getSize() {
+        return size;
+    }
+
+    public void setSize(int size) {
+        this.size = size;
     }
 }

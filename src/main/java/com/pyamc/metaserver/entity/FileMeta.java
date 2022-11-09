@@ -7,7 +7,7 @@ public class FileMeta {
     private String fileKey;
     private long fileSize;
     private String contentType;
-    private String fileStatus;
+    private long fileStatus;
     private List<String> chunkKeys;
 
     public FileMeta(String fileName, String fileKey, long fileSize, String contentType, List<String> chunkKeys) {
@@ -16,14 +16,14 @@ public class FileMeta {
         this.fileSize = fileSize;
         this.contentType = contentType;
         this.chunkKeys = chunkKeys;
-        this.fileStatus = "0";
+        this.fileStatus = 0;
     }
 
-    public String getFileStatus() {
+    public long getFileStatus() {
         return fileStatus;
     }
 
-    public void setFileStatus(String fileStatus) {
+    public void setFileStatus(long fileStatus) {
         this.fileStatus = fileStatus;
     }
 
