@@ -170,10 +170,12 @@ public class FileService {
 
     private Result sendChunk2DataNode(String contentType, Chunk c, List<DataNode> inodes) throws ExecutionException, InterruptedException {
         try {
+            // calc send bytes
+            byte[] chunkBytes = buildChunkBytes(c);
             // 预占checkpoint
-            List<INodeSnapShot> snapShots = preOccupyDataCheckPoint(inodes);
+            List<INodeSnapShot> snapShots = preOccupyDataCheckPoint(chunkBytes.length, inodes);
             // 实际发送
-            ChunkMeta res = getSendChunkResult(c, contentType, snapShots, inodes);
+            ChunkMeta res = getSendChunkResult(chunkBytes, c, contentType, snapShots, inodes);
             if (calcDoneNodes(res.getInodes()) < replicaFactor) {
                 return Result.Fail();
             }
@@ -184,7 +186,7 @@ public class FileService {
         }
     }
 
-    private ChunkMeta getSendChunkResult(Chunk c, String contentType, List<INodeSnapShot> snapShots, List<DataNode> inodes) throws IOException {
+    private ChunkMeta getSendChunkResult(byte[] chunkBytes, Chunk c, String contentType, List<INodeSnapShot> snapShots, List<DataNode> inodes) throws IOException {
         ChunkMeta cm = new ChunkMeta(c.getChunkKey(), snapShots);
         etcdService.put(getChunkMetaKey(c.getChunkKey()), JSON.toJSONString(cm));
         // 获取DataNode元信息
@@ -193,7 +195,6 @@ public class FileService {
             DataNode node = inodes.get(i);
             MultipartEntityBuilder entityBuilder = MultipartEntityBuilder.create();
             entityBuilder.addTextBody("offset", String.valueOf(snapShots.get(i).getOffset()));
-            byte[] chunkBytes = buildChunkBytes(c);
             entityBuilder.addBinaryBody("chunk", chunkBytes, ContentType.parse(contentType), c.getChunkKey());
             String res = HttpUtil.postEntity(buildPostChunkUrl(node.getUrl()), entityBuilder.build());
             if (!res.isEmpty()) {
@@ -216,7 +217,7 @@ public class FileService {
         return out.toByteArray();
     }
 
-    private List<INodeSnapShot> preOccupyDataCheckPoint(List<DataNode> inodes) throws BizException, ExecutionException, InterruptedException {
+    private List<INodeSnapShot> preOccupyDataCheckPoint(int length, List<DataNode> inodes) throws BizException, ExecutionException, InterruptedException {
         List<INodeSnapShot> snapShots = new ArrayList<>(inodes.size());
         // 预占DataNode空间
         for (int i = 0; i < inodes.size(); i++) {
@@ -230,7 +231,7 @@ public class FileService {
                 // 1.尝试cas checkpoint
                 String origin = JSON.toJSONString(inode);
                 long checkpoint = inode.getCheckpoint();
-                inode.setCheckpoint(checkpoint + ChunkCapacity);
+                inode.setCheckpoint(checkpoint + length);
                 String update = JSON.toJSONString(inode);
                 if (etcdService.syncCas(inode.getKey(), origin, update)) {
                     snapShots.add(new INodeSnapShot(inode.getKey(), checkpoint, 0));
