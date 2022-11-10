@@ -23,7 +23,6 @@ public class FileController {
     @ResponseBody
     public Result put(@RequestParam("uploadFile") MultipartFile uploadFile,
                          @RequestParam("fileTagName") String fileTagName)  {
-
         fileService.process(uploadFile);
         return new Result();
     }
