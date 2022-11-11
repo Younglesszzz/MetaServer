@@ -113,16 +113,8 @@ public class HttpUtil {
         return getRespString(post, headers);
     }
 
-    public static String postEntity(String url, HttpEntity entity) {
-        HttpPost post = new HttpPost(url);
-        post.setEntity(entity);
-        HttpResponse response = null;
-        try {
-            response = HttpClients.createDefault().execute(post);
-        } catch (IOException e) {
-            e.printStackTrace();
-            return "";
-        }
+    public static String getPostStr(String url, HttpEntity entity) {
+        HttpResponse response = postEntity(url, entity);
         int status = response.getStatusLine().getStatusCode();
         String resultStr =null;
         if (status == 200) {
@@ -138,6 +130,37 @@ public class HttpUtil {
             }
         }
         return resultStr == null ? "" : resultStr;
+    }
+
+    public static byte[] getPostBytes(String url, HttpEntity entity) {
+        HttpResponse response = postEntity(url, entity);
+        if (response == null) {
+            return null;
+        }
+        int status = response.getStatusLine().getStatusCode();
+        if (status == 200) {
+            byte[] content;
+            try {
+                content = getContent(response);
+                return content;
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        return null;
+    }
+
+    public static HttpResponse postEntity(String url, HttpEntity entity) {
+        HttpPost post = new HttpPost(url);
+        post.setEntity(entity);
+        HttpResponse response = null;
+        try {
+            response = HttpClients.createDefault().execute(post);
+            return response;
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return null;
     }
 
     private static byte[] getContent(HttpResponse response)

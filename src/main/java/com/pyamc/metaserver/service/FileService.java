@@ -5,30 +5,26 @@ import com.pyamc.metaserver.entity.*;
 import com.pyamc.metaserver.exception.BizException;
 import com.pyamc.metaserver.util.FileUtil;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.lang.String;
 
 import com.pyamc.metaserver.util.HttpUtil;
-import com.pyamc.metaserver.util.NumUtil;
 import io.etcd.jetcd.KeyValue;
 import io.etcd.jetcd.kv.GetResponse;
+import io.etcd.jetcd.kv.TxnResponse;
 import io.etcd.jetcd.options.GetOption;
 import org.apache.http.entity.ContentType;
 import org.apache.http.entity.mime.MultipartEntityBuilder;
-import org.apache.http.entity.mime.content.ContentBody;
-import org.apache.http.entity.mime.content.InputStreamBody;
-import org.apache.http.entity.mime.content.StringBody;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
+import javax.servlet.ServletOutputStream;
+import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 
@@ -53,8 +49,101 @@ public class FileService {
     private static final int ChunkKeyBytesNum = 36;
     private static final int ChunkSizeBytesNum = 4;
     private static final int FileBytesSize = ChunkCapacity - ChunkKeyBytesNum - ChunkSizeBytesNum - CheckSumBytesNum;
-    private static final int retryTimes = 3;
-    private static final int replicaFactor = 3;
+    private static final int RETRY_TIMES = 3;
+    private static final int REPLICA_FACTOR = 3;
+
+    public void download(String fileKey, HttpServletResponse response) {
+        // 1.获取文件元信息
+        FileMeta fm = getFileMeta(fileKey);
+        if (fm == null) {
+            logger.warn("Download#Error FileKey {} MetaData Not Exist", fileKey);
+            return ;
+        }
+        // 2.合并文件流
+        List<String> keys = fm.getChunkKeys();
+        byte[] data = mergeFileStream(keys);
+        if (data == null || data.length == 0) {
+            logger.warn("Merge File Stream Is Empty {}", fileKey);
+            return;
+        }
+        // 3.返回
+        try {
+            ServletOutputStream out = response.getOutputStream();
+            String cd = String.format("attachment; filename=\"%s\"", fm.getFileName());
+            String ct = String.format("%s; name=\"%s\"", fm.getContentType(), fm.getFileName());
+            response.setContentType(ct);
+            response.setHeader("Content-Disposition", cd);
+            out.write(data);
+            out.flush();
+        } catch (IOException e) {
+            logger.error("Download IOException {}", e.getMessage());
+            e.printStackTrace();
+        }
+
+    }
+
+    private byte[] mergeFileStream(List<String> keys) {
+        // 获取etcd 信息
+        try {
+            TxnResponse res = etcdService.multiGet(keys);
+            List<GetResponse> gets = res.getGetResponses();
+            List<ChunkMeta> metas = new ArrayList<>();
+            for (GetResponse get : gets) {
+                String val = get.getKvs().get(0).getValue().toString();
+                ChunkMeta cm = JSON.parseObject(val, ChunkMeta.class);
+                metas.add(cm);
+            }
+            // in case of disorder
+            metas.sort(Comparator.comparing(ChunkMeta::getChunkKey));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            // 获取单一chunk byte[]
+            for (ChunkMeta meta : metas) {
+                byte[] b = getHttpRetrieveChunkResult(meta);
+                logger.warn("RetrieveChunkResult IS NULL {}", JSON.toJSONString(meta));
+                if (b == null || b.length == 0) {
+                    return null;
+                }
+                out.write(b);
+            }
+            return out.toByteArray();
+        } catch (ExecutionException | InterruptedException | IOException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    private byte[] getHttpRetrieveChunkResult(ChunkMeta meta) {
+        List<INodeSnapShot> shots = meta.getInodes();
+        try {
+            // hash算法
+            int i = 0;
+            int start = meta.getChunkKey().hashCode() % REPLICA_FACTOR;
+            while (true) {
+                if (i == RETRY_TIMES) {
+                    logger.error("RETRY TIMES FAIL");
+                    return null;
+                }
+                INodeSnapShot shot = shots.get(start);
+                String val = etcdService.syncGetValue(shot.getNodeKey());
+                DataNode node = JSON.parseObject(val, DataNode.class);
+                MultipartEntityBuilder entityBuilder = MultipartEntityBuilder.create();
+                entityBuilder.addTextBody("offset", String.valueOf(shot.getOffset()));
+                entityBuilder.addTextBody("chunkKey", meta.getChunkKey());
+                byte[] data = HttpUtil.getPostBytes(buildGetChunkUrl(node.getUrl()), entityBuilder.build());
+                if (data != null && data.length > 0) {
+                    return data;
+                }
+                start = start == REPLICA_FACTOR - 1 ? 0 : start + 1;
+                i++;
+            }
+        } catch (ExecutionException | InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        return null;
+    }
+
+
     public Result process(MultipartFile uploadFile) {
         logger.info("Process#uploadFile: {}", uploadFile.getName());
         String fileKey = null;
@@ -123,7 +212,7 @@ public class FileService {
             if (value == null || value.isEmpty()) {
                 return null;
             }
-            return (FileMeta) JSON.parse(value);
+            return JSON.parseObject(value, FileMeta.class);
         } catch (ExecutionException | InterruptedException e) {
             e.printStackTrace();
             return null;
@@ -176,7 +265,7 @@ public class FileService {
             List<INodeSnapShot> snapShots = preOccupyDataCheckPoint(chunkBytes.length, inodes);
             // 实际发送
             ChunkMeta res = getSendChunkResult(chunkBytes, c, contentType, snapShots, inodes);
-            if (calcDoneNodes(res.getInodes()) < replicaFactor) {
+            if (calcDoneNodes(res.getInodes()) < REPLICA_FACTOR) {
                 return Result.Fail();
             }
             return null;
@@ -196,7 +285,7 @@ public class FileService {
             MultipartEntityBuilder entityBuilder = MultipartEntityBuilder.create();
             entityBuilder.addTextBody("offset", String.valueOf(snapShots.get(i).getOffset()));
             entityBuilder.addBinaryBody("chunk", chunkBytes, ContentType.parse(contentType), c.getChunkKey());
-            String res = HttpUtil.postEntity(buildPostChunkUrl(node.getUrl()), entityBuilder.build());
+            String res = HttpUtil.getPostStr(buildPostChunkUrl(node.getUrl()), entityBuilder.build());
             if (!res.isEmpty()) {
                 cm.getInodes().get(i).setStatus(1);
             }
@@ -224,7 +313,7 @@ public class FileService {
             DataNode inode = inodes.get(i);
             int retryCounter = 0;
             while (true) {
-                if (retryCounter == retryTimes) {
+                if (retryCounter == RETRY_TIMES) {
                     logger.warn("SendChunk2DataNode#ETCD CAS RETRY REACH LIMIT");
                     throw new BizException("PreOccupyDataCheckPoint Failed");
                 }
@@ -250,23 +339,12 @@ public class FileService {
         return snapShots;
     }
 
-//    private Map<String, DataNode> getNodes(List<INodeSnapShot> snapShots) {
-//        Map<String, DataNode> map = new HashMap<>();
-//        for (INodeSnapShot snapShot : snapShots) {
-//            try {
-//                DataNode d = getNodeInfo(snapShot.getNodeKey());
-//                if ()
-//                map.put(snapShot.getNodeKey(), getNodeInfo(snapShot.getNodeKey()));
-//            } catch (ExecutionException | InterruptedException e) {
-//                e.printStackTrace();
-//            }
-//        }
-//        return map;
-//    }
-
-
     private String buildPostChunkUrl(String url) {
         return url + "/chunk/put";
+    }
+
+    private String buildGetChunkUrl(String url) {
+        return url + "/chunk/get";
     }
 
     private DataNode getNodeInfo(String inodeKey) throws ExecutionException, InterruptedException {
@@ -274,7 +352,7 @@ public class FileService {
         if (value == null || value.isEmpty()) {
             return null;
         }
-        return (DataNode) JSON.parse(value);
+        return JSON.parseObject(value, DataNode.class);
     }
 
     private String getNodeInfoKey(String nodeName) {
@@ -295,7 +373,6 @@ public class FileService {
         } catch (ExecutionException | InterruptedException e) {
             e.printStackTrace();
         }
-
         return res == null ? null : buildDataNodes(res.getKvs());
     }
 

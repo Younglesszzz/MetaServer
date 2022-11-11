@@ -10,19 +10,12 @@ import io.etcd.jetcd.op.CmpTarget;
 import io.etcd.jetcd.op.Op;
 import io.etcd.jetcd.options.GetOption;
 import io.etcd.jetcd.options.PutOption;
-import io.etcd.jetcd.watch.WatchEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import javax.annotation.PostConstruct;
-import javax.annotation.Resource;
-import javax.xml.crypto.Data;
-import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 
 @Service
@@ -92,4 +85,27 @@ public class EtcdService {
     private ByteSequence byteSequenceOf(String s) {
         return ByteSequence.from(s.getBytes());
     }
+
+    public TxnResponse multiGet(List<String> keys) throws ExecutionException, InterruptedException {
+        Txn txn = kvClient.txn();
+        for (String key : keys) {
+            key = getChunkMetaKey(key);
+            ByteSequence k = byteSequenceOf(key);
+            txn.Then(Op.get(k, GetOption.DEFAULT));
+        }
+        TxnResponse txnResponse = txn.commit().get();
+        if (txnResponse.isSucceeded() && !txnResponse.getGetResponses().isEmpty()) {
+            return txnResponse;
+        }
+        return null;
+    }
+
+    private ByteSequence getNonExistKey() {
+        return byteSequenceOf("NON_EXIST_KEY");
+    }
+
+    private String getChunkMetaKey(String chunkId) {
+        return "CHUNKINFO_" + chunkId;
+    }
+
 }

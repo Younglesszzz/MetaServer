@@ -4,8 +4,10 @@ import com.alibaba.fastjson.JSON;
 import com.pyamc.metaserver.entity.Result;
 import com.pyamc.metaserver.service.EtcdService;
 import com.pyamc.metaserver.service.FileService;
+import io.etcd.jetcd.kv.TxnResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -15,6 +17,9 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutionException;
 
 @SpringBootTest
 class MetaServerApplicationTests {
@@ -43,6 +48,7 @@ class MetaServerApplicationTests {
         } catch (IOException e) {
             e.printStackTrace();
         }
+
 //        try {
 //            FileInputStream in = new FileInputStream(file);
 ////            String contentType = Files.probeContentType(file.getPath());
@@ -56,4 +62,22 @@ class MetaServerApplicationTests {
     }
 
 
+    @Test
+    void testMultiGet() {
+        List<String> list = new ArrayList<>();
+        list.add("CHUNKINFO_2945C3ACDD8ADEF1396C54CF9F34DD230000");
+        try {
+            TxnResponse res = etcdService.multiGet(list);
+            res.getGetResponses().get(0).getKvs();
+
+            System.out.println(JSON.toJSONString(res));
+        } catch (ExecutionException | InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Test
+    void testDownload() {
+        fileService.download("FILE_KEY_2945C3ACDD8ADEF1396C54CF9F34DD23", new MockHttpServletResponse());
+    }
 }

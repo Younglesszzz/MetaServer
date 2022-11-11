@@ -7,6 +7,7 @@ import org.springframework.web.multipart.MultipartFile;
 import reactor.netty.http.client.HttpClient;
 
 import javax.annotation.Resource;
+import javax.servlet.http.HttpServletResponse;
 
 @RestController
 @RequestMapping("/file")
@@ -15,8 +16,8 @@ public class FileController {
     FileService fileService;
 
     @RequestMapping("/get")
-    public Result get(@RequestParam String fileKey) {
-        return new Result();
+    public void get(@RequestParam String fileKey, HttpServletResponse response) {
+        fileService.download(fileKey, response);
     }
 
     @PostMapping(value = "/put")
@@ -24,6 +25,6 @@ public class FileController {
     public Result put(@RequestParam("uploadFile") MultipartFile uploadFile,
                          @RequestParam("fileTagName") String fileTagName)  {
         fileService.process(uploadFile);
-        return new Result();
+        return Result.Success();
     }
 }
