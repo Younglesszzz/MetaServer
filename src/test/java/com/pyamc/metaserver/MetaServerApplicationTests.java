@@ -37,7 +37,7 @@ class MetaServerApplicationTests {
 
     @Test
     void uploadFile() {
-        File file = new File("C:\\Users\\Young\\Pictures\\奶茶弟弟.jpg");
+        File file = new File("C:\\Users\\Young\\Videos\\Captures\\绝地求生  2020-10-03 23-03-12.mp4");
         try {
             String contentType = file.toURL().openConnection().getContentType();
             FileInputStream in = new FileInputStream(file);

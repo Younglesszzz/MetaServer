@@ -6,6 +6,7 @@ import com.pyamc.metaserver.exception.BizException;
 import com.pyamc.metaserver.util.FileUtil;
 
 import java.io.ByteArrayOutputStream;
+import java.io.UnsupportedEncodingException;
 import java.lang.String;
 
 import com.pyamc.metaserver.util.HttpUtil;
@@ -24,7 +25,9 @@ import javax.annotation.Resource;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.net.URLEncoder;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 
@@ -57,29 +60,32 @@ public class FileService {
         FileMeta fm = getFileMeta(fileKey);
         if (fm == null) {
             logger.warn("Download#Error FileKey {} MetaData Not Exist", fileKey);
-            return ;
         }
         // 2.合并文件流
         List<String> keys = fm.getChunkKeys();
         byte[] data = mergeFileStream(keys);
         if (data == null || data.length == 0) {
             logger.warn("Merge File Stream Is Empty {}", fileKey);
-            return;
         }
         // 3.返回
         try {
             ServletOutputStream out = response.getOutputStream();
-            String cd = String.format("attachment; filename=\"%s\"", fm.getFileName());
-            String ct = String.format("%s; name=\"%s\"", fm.getContentType(), fm.getFileName());
-            response.setContentType(ct);
-            response.setHeader("Content-Disposition", cd);
+            response.setContentType("application/octet-stream");
+            String fileName = new String(fm.getFileName().getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8);
+            response.setHeader("Content-disposition", "attachment;filename*=utf-8''"+ encodeFileName(fm.getFileName()));
+            response.addHeader("content-length", String.valueOf(fm.getFileSize()));
+            response.setCharacterEncoding("UTF-8");
             out.write(data);
             out.flush();
+            out.close();
         } catch (IOException e) {
             logger.error("Download IOException {}", e.getMessage());
             e.printStackTrace();
         }
+    }
 
+    private static String encodeFileName(String fileName) throws UnsupportedEncodingException {
+        return URLEncoder.encode(fileName, "UTF-8").replace("+", "%20");
     }
 
     private byte[] mergeFileStream(List<String> keys) {
@@ -99,8 +105,8 @@ public class FileService {
             // 获取单一chunk byte[]
             for (ChunkMeta meta : metas) {
                 byte[] b = getHttpRetrieveChunkResult(meta);
-                logger.warn("RetrieveChunkResult IS NULL {}", JSON.toJSONString(meta));
                 if (b == null || b.length == 0) {
+                    logger.warn("RetrieveChunkResult IS NULL {}", JSON.toJSONString(meta));
                     return null;
                 }
                 out.write(b);
@@ -117,13 +123,14 @@ public class FileService {
         try {
             // hash算法
             int i = 0;
-            int start = meta.getChunkKey().hashCode() % REPLICA_FACTOR;
+            int start = calcHash(meta.getChunkKey(), REPLICA_FACTOR);
             while (true) {
                 if (i == RETRY_TIMES) {
                     logger.error("RETRY TIMES FAIL");
                     return null;
                 }
                 INodeSnapShot shot = shots.get(start);
+
                 String val = etcdService.syncGetValue(shot.getNodeKey());
                 DataNode node = JSON.parseObject(val, DataNode.class);
                 MultipartEntityBuilder entityBuilder = MultipartEntityBuilder.create();
@@ -141,6 +148,10 @@ public class FileService {
         }
 
         return null;
+    }
+
+    private int calcHash(String chunkKey, int replicaFactor) {
+        return Math.abs((chunkKey.hashCode() >>> 16) ^ chunkKey.hashCode()) % replicaFactor;
     }
 
 
